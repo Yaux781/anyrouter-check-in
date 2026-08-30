@@ -1,4 +1,5 @@
 name: AgentRouter GitHub 真签到
+# 独立于现有 AnyRouter 工作流，仅处理 AgentRouter GitHub OAuth 重登。
 
 on:
   schedule:
