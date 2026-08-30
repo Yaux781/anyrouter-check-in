@@ -1,0 +1,115 @@
+name: AgentRouter GitHub 真签到
+
+on:
+  schedule:
+    - cron: '20 1 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: agentrouter-github-real-checkin
+  cancel-in-progress: false
+
+jobs:
+  checkin:
+    name: AgentRouter-GitHub OAuth 重登
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUNBUFFERED: 1
+      TZ: Asia/Shanghai
+      CHECKIN_HEADLESS: 'false'
+
+    steps:
+      - name: 检出 AnyRouter 仓库（仅复用代理脚本）
+        uses: actions/checkout@v6
+
+      - name: 检出 AgentRouter OAuth 引擎（固定版本）
+        uses: actions/checkout@v6
+        with:
+          repository: TheFloodDragon/auto-checkin
+          ref: 6502bf8636c4c1ea0433af5f4ceec345c91a9ea2
+          path: agentrouter-engine
+
+      - name: 设置 uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: latest
+
+      - name: 设置 Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: 缓存 AgentRouter 依赖
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/uv
+            agentrouter-engine/.venv
+          key: ${{ runner.os }}-agentrouter-oauth-${{ hashFiles('agentrouter-engine/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-agentrouter-oauth-
+
+      - name: 安装 AgentRouter 依赖
+        working-directory: agentrouter-engine
+        run: uv sync --locked --extra dev
+
+      - name: 恢复 AgentRouter 专用配置
+        working-directory: agentrouter-engine
+        env:
+          ACCOUNTS: ${{ secrets.AGENTROUTER_ACCOUNTS }}
+        run: |
+          uv run python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get("ACCOUNTS", "").strip()
+          if not value:
+              raise SystemExit("未配置 production Secret: AGENTROUTER_ACCOUNTS")
+          Path("ACCOUNTS.json").write_text(value, encoding="utf-8")
+          print("AgentRouter 配置已恢复（内容不输出）")
+          PY
+
+      - name: 安装浏览器系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb fonts-noto-color-emoji fonts-wqy-zenhei fonts-unifont
+
+      - name: 缓存 Camoufox
+        uses: actions/cache@v5
+        id: camoufox-cache
+        with:
+          path: ~/.cache/camoufox
+          key: ${{ runner.os }}-camoufox-0.4.11
+
+      - name: 安装 Camoufox
+        if: steps.camoufox-cache.outputs.cache-hit != 'true'
+        working-directory: agentrouter-engine
+        run: uv run python -m camoufox fetch
+
+      - name: 配置代理
+        env:
+          PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
+          PROXY_TEST_URL: https://agentrouter.org/api/status
+          MIHOMO_VERSION: v1.19.27
+          PROXY_REQUIRED: false
+        run: bash scripts/setup_mihomo_proxy.sh
+
+      - name: 执行 AgentRouter-GitHub 真签到
+        working-directory: agentrouter-engine
+        run: |
+          export CHECKIN_PROXY="${CHECKIN_PROXY_URL:-}"
+          xvfb-run -a --server-args="-screen 0 1920x1080x24" uv run python -u run.py
+
+      - name: 生成结果报告
+        if: always()
+        working-directory: agentrouter-engine
+        run: |
+          uv run python -m ci.report || true
+          if [ -f checkin_report.md ]; then
+            cat checkin_report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 停止代理
+        if: always()
+        run: bash scripts/stop_mihomo_proxy.sh
