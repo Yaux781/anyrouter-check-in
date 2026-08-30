@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '20 1 * * *'
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/agentrouter.yml'
 
 concurrency:
   group: agentrouter-github-real-checkin
