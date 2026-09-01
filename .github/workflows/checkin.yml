@@ -94,7 +94,8 @@ jobs:
         CHECKIN_HEADLESS: false
         CHECKIN_HUMANIZE: true
         CHECKIN_WAIT_TIMEOUT_MS: 120000
-        ANYROUTER_ACCOUNTS: ${{ secrets.ANYROUTER_ACCOUNTS }}
+        BASE_ACCOUNTS: ${{ secrets.ANYROUTER_ACCOUNTS }}
+        EXTRA_ACCOUNTS: ${{ secrets.ANYROUTER_EXTRA_ACCOUNTS }}
         PROVIDERS: ${{ secrets.PROVIDERS }}
         DINGDING_WEBHOOK: ${{ secrets.DINGDING_WEBHOOK }}
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
@@ -114,6 +115,21 @@ jobs:
         BARK_KEY: ${{ secrets.BARK_KEY }}
         BARK_SERVER: ${{ secrets.BARK_SERVER }}
       run: |
+        python - <<'PY'
+        import json
+        import os
+        from pathlib import Path
+
+        base = json.loads(os.environ["BASE_ACCOUNTS"])
+        extra = json.loads(os.environ.get("EXTRA_ACCOUNTS") or "[]")
+        merged = base + extra
+        Path(".merged_accounts.json").write_text(
+            json.dumps(merged, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        print(f"账号配置已合并：原有 {len(base)} + 新增 {len(extra)}")
+        PY
+        export ANYROUTER_ACCOUNTS="$(cat .merged_accounts.json)"
         xvfb-run -a --server-args="-screen 0 1920x1080x24" uv run checkin.py
 
     - name: 上传调试截图
