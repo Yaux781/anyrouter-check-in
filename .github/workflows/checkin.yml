@@ -97,6 +97,7 @@ jobs:
         BASE_ACCOUNTS: ${{ secrets.ANYROUTER_ACCOUNTS }}
         EXTRA_ACCOUNTS: ${{ secrets.ANYROUTER_EXTRA_ACCOUNTS }}
         PROVIDERS: ${{ secrets.PROVIDERS }}
+        ANYROUTER_LINUXDO_SESSION: ${{ secrets.ANYROUTER_LINUXDO_SESSION }}
         DINGDING_WEBHOOK: ${{ secrets.DINGDING_WEBHOOK }}
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
         EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
@@ -123,6 +124,19 @@ jobs:
         base = json.loads(os.environ["BASE_ACCOUNTS"])
         extra = json.loads(os.environ.get("EXTRA_ACCOUNTS") or "[]")
         merged = base + extra
+
+        linuxdo_session = os.environ.get("ANYROUTER_LINUXDO_SESSION", "").strip()
+        if linuxdo_session:
+            matches = [
+                account for account in merged
+                if account.get("name") == "LinuxDO账号"
+                and account.get("provider", "anyrouter") == "anyrouter"
+            ]
+            if len(matches) != 1:
+                raise RuntimeError(f"LinuxDO账号配置匹配数量异常: {len(matches)}")
+            matches[0].setdefault("cookies", {})["session"] = linuxdo_session
+            print("LinuxDO账号 session 已应用独立 Secret 覆盖")
+
         Path(".merged_accounts.json").write_text(
             json.dumps(merged, ensure_ascii=False, separators=(",", ":")),
             encoding="utf-8",
@@ -154,7 +168,7 @@ jobs:
       run: |
         echo "签到任务执行完成"
         echo "时间: $(date)"
-        if [ "${DEBUG_MODE}" = "true" ] && [ -d checkin_screenshots ] && [ "$(ls -A checkin_screenshots 2>/dev/null)" ]; then
+        if [ "${{ env.DEBUG_MODE }}" = "true" ] && [ -d checkin_screenshots ] && [ "$(ls -A checkin_screenshots 2>/dev/null)" ]; then
           echo "调试截图已上传为 artifact: checkin-screenshots-${{ github.run_id }}"
           ls -la checkin_screenshots/
         fi
