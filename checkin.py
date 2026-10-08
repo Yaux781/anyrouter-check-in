@@ -520,7 +520,9 @@ async def main():
 			if success:
 				success_count += 1
 
-			should_notify_this_account = False
+			# 每次计划运行都汇总全部 AnyRouter 账号，邮件中始终包含当日余额。
+			should_notify_this_account = True
+			need_notify = True
 
 			if not success:
 				should_notify_this_account = True
@@ -630,10 +632,10 @@ async def main():
 			notify_content += f'\n\n{screenshot_hint}'
 
 		print(notify_content)
-		notify.push_message('AnyRouter Check-in Alert', notify_content, msg_type='text')
-		print('[NOTIFY] Notification sent due to failures or balance changes')
+		notify.push_message('AnyRouter 每日签到与余额', notify_content, msg_type='text')
+		print('[NOTIFY] Daily notification sent with account balances')
 	else:
-		print('[INFO] All accounts successful and no balance changes detected, notification skipped')
+		print('[INFO] No account details available, notification skipped')
 
 	sys.exit(0 if success_count > 0 else 1)
 
