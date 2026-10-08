@@ -124,6 +124,11 @@ jobs:
         base = json.loads(os.environ["BASE_ACCOUNTS"])
         extra = json.loads(os.environ.get("EXTRA_ACCOUNTS") or "[]")
         merged = base + extra
+        merged = [
+            account for account in merged
+            if account.get("provider", "anyrouter") == "anyrouter"
+        ]
+        print(f"已停用非 AnyRouter 账号，仅保留 {len(merged)} 个 AnyRouter 账号")
 
         linuxdo_session = os.environ.get("ANYROUTER_LINUXDO_SESSION", "").strip()
         if linuxdo_session:
