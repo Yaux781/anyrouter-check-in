@@ -2,14 +2,7 @@ name: AgentRouter GitHub 真签到
 # 独立于现有 AnyRouter 工作流，仅处理 AgentRouter GitHub OAuth 重登。
 
 on:
-  schedule:
-    - cron: '20 1 * * *'
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/agentrouter.yml'
 
 concurrency:
   group: agentrouter-github-real-checkin
