@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from utils.debug import debug_print, is_debug_enabled
 from utils.popups import dismiss_popups, setup_popup_guard
@@ -393,6 +394,68 @@ async def _parse_user_self_response(response) -> dict | None:
 	return _extract_user_profile(payload)
 
 
+def auth_error_categories(message: object) -> list[str]:
+	"""Emit fixed labels only: server/page text may contain credentials or personal data."""
+	if not isinstance(message, str):
+		return []
+	patterns = {
+		'rate_limited': r'too many|rate.?limit|频繁|次数过多|稍后再试',
+		'credentials_rejected': r'密码.*(?:错误|不正确)|用户名.*(?:错误|不存在)|invalid credentials|incorrect password|invalid username',
+		'challenge_required': r'captcha|turnstile|verify you are human|人机验证|验证码|请进行验证',
+		'unauthorized': r'unauthorized|未登录|无权|未授权|登录已过期|登录失效',
+		'account_disabled': r'account.*(?:disabled|banned)|账号.*(?:禁用|封禁)|用户.*(?:禁用|封禁)',
+		'service_error': r'internal server error|service unavailable|系统错误|服务器错误|服务不可用',
+	}
+	return [label for label, pattern in patterns.items() if re.search(pattern, message, re.I)]
+
+
+async def log_auth_response(response) -> None:
+	"""Log only allowlisted auth metadata; never bodies, headers, URLs, or user profiles."""
+	path = urlsplit(response.url).path
+	if path not in {'/api/user/login', USER_SELF_API_SUFFIX}:
+		return
+	try:
+		payload = await response.json()
+	except Exception:  # nosec B110
+		print(f'[AUTH-DIAG] endpoint={path} status={response.status} format=non_json')
+		return
+	if not isinstance(payload, dict):
+		print(f'[AUTH-DIAG] endpoint={path} status={response.status} format=unexpected_json')
+		return
+	message = ' '.join(
+		payload[key] for key in ('message', 'msg', 'error') if isinstance(payload.get(key), str)
+	)
+	success = payload.get('success')
+	success_label = str(success) if isinstance(success, bool) else 'absent'
+	print(
+		f'[AUTH-DIAG] endpoint={path} status={response.status} success={success_label} '
+		f'profile_present={bool(_extract_user_profile(payload))} '
+		f'message_present={bool(message)} categories={auth_error_categories(message)}'
+	)
+
+
+async def log_auth_page_state(page: Page) -> None:
+	"""Reduce page error text to fixed labels instead of publishing arbitrary page content."""
+	try:
+		state = await page.evaluate('''() => ({
+			text: [...document.querySelectorAll('[role="alert"], .semi-toast-content, .semi-form-field-error-message')]
+				.filter(el => el.getClientRects().length > 0)
+				.map(el => el.innerText || '').join(' ').slice(0, 4000),
+			alertCount: document.querySelectorAll('[role="alert"], .semi-toast-content, .semi-form-field-error-message').length,
+			passwordForm: !!document.querySelector('input[type="password"]'),
+			challenge: !!document.querySelector('iframe[src*="captcha"], iframe[src*="turnstile"], #nocaptcha')
+		})''')
+		path = urlsplit(page.url).path
+		location = path if path in {'/login', '/console', '/console/'} else 'other'
+		print(
+			f'[AUTH-DIAG] page={location} alert_count={int(state.get("alertCount", 0))} '
+			f'password_form={bool(state.get("passwordForm"))} challenge={bool(state.get("challenge"))} '
+			f'page_categories={auth_error_categories(state.get("text"))}'
+		)
+	except Exception:  # nosec B110
+		print('[AUTH-DIAG] page_state=unavailable')
+
+
 async def is_logged_in(page: Page) -> bool:
 	"""快速判断：是否在 /console，或仍停留在登录页。"""
 	url = page.url.lower()
@@ -432,9 +495,13 @@ async def verify_browser_login(page: Page, console_url: str, timeout_ms: int) ->
 	verify_timeout = min(timeout_ms, SESSION_WAIT_TIMEOUT_MS)
 	captured_profile: dict | None = None
 	verified = asyncio.Event()
+	observed_responses = 0
 
 	async def on_response(response) -> None:
-		nonlocal captured_profile
+		nonlocal captured_profile, observed_responses
+		if urlsplit(response.url).path == USER_SELF_API_SUFFIX:
+			observed_responses += 1
+			await log_auth_response(response)
 		if captured_profile is not None:
 			return
 		profile = await _parse_user_self_response(response)
@@ -468,6 +535,8 @@ async def verify_browser_login(page: Page, console_url: str, timeout_ms: int) ->
 			print('[INFO] Login verified')
 		return captured_profile
 
+	print(f'[AUTH-DIAG] verification_failed observed_self_responses={observed_responses}')
+	await log_auth_page_state(page)
 	if CONSOLE_PATH in page.url.lower():
 		print(f'[WARN] Reached {CONSOLE_PATH} but {USER_SELF_API_SUFFIX} returned no user profile')
 	else:
@@ -776,4 +845,20 @@ async def login_with_email_form(
 		account_name=account_name,
 	)
 	await fill_email_credentials(page, email, password, timeout_ms)
-	await submit_login_form(page, timeout_ms)
+	pending: set[asyncio.Task] = set()
+
+	def on_response(response) -> None:
+		if urlsplit(response.url).path not in {'/api/user/login', USER_SELF_API_SUFFIX}:
+			return
+		if len(pending) >= 20:
+			return
+		pending.add(asyncio.create_task(log_auth_response(response)))
+
+	page.on('response', on_response)
+	try:
+		await submit_login_form(page, timeout_ms)
+		await log_auth_page_state(page)
+	finally:
+		page.remove_listener('response', on_response)
+		if pending:
+			await asyncio.gather(*pending, return_exceptions=True)
