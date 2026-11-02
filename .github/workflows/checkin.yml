@@ -99,6 +99,7 @@ jobs:
         EXTRA_ACCOUNTS: ${{ secrets.ANYROUTER_EXTRA_ACCOUNTS }}
         PROVIDERS: ${{ secrets.PROVIDERS }}
         ANYROUTER_LINUXDO_SESSION: ${{ secrets.ANYROUTER_LINUXDO_SESSION }}
+        ANYROUTER_LINUXDO_YAUX_SESSION: ${{ secrets.ANYROUTER_LINUXDO_YAUX_SESSION }}
         DINGDING_WEBHOOK: ${{ secrets.DINGDING_WEBHOOK }}
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
         EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
@@ -143,11 +144,25 @@ jobs:
             matches[0].setdefault("cookies", {})["session"] = linuxdo_session
             print("LinuxDO账号 session 已应用独立 Secret 覆盖")
 
+        yaux_session = os.environ.get("ANYROUTER_LINUXDO_YAUX_SESSION", "").strip()
+        if yaux_session:
+            if any(str(account.get("api_user")) == "229150" for account in merged):
+                raise RuntimeError("LinuxDO-Yaux781 账号已存在，拒绝重复添加")
+            merged.append({
+                "name": "LinuxDO-Yaux781",
+                "provider": "anyrouter",
+                "api_user": "229150",
+                "cookies": {"session": yaux_session},
+            })
+            print("LinuxDO-Yaux781 账号已通过独立 Secret 加入")
+        else:
+            print("LinuxDO-Yaux781 会话 Secret 尚未配置，保留原有账号")
+
         Path(".merged_accounts.json").write_text(
             json.dumps(merged, ensure_ascii=False, separators=(",", ":")),
             encoding="utf-8",
         )
-        print(f"账号配置已合并：原有 {len(base)} + 新增 {len(extra)}")
+        print(f"账号配置已合并：启用 {len(merged)} 个 AnyRouter 账号")
         PY
         export ANYROUTER_ACCOUNTS="$(cat .merged_accounts.json)"
         xvfb-run -a --server-args="-screen 0 1920x1080x24" uv run checkin.py
